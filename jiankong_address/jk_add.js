@@ -84,25 +84,55 @@ async function checkNewBlocks() {
             for (let blockNum = lastBlockChecked + 1; blockNum <= latestBlock; blockNum++) {
                 try {
                     const block = await getBlockWithRetry(blockNum);
-                    if (!block) {
-                        console.log(`区块 ${blockNum} 未找到，跳过`);
-                        continue;
-                    }
-    
-                    if (!block.transactions) {
-                        console.log(`区块 ${blockNum} 没有交易，跳过`);
-                        continue;
-                    }
-    
+                    if (!block || !block.transactions) continue;
+
                     for (const tx of block.transactions) {
                         const txFrom = tx.from ? tx.from.toLowerCase() : null;
                         const txTo = tx.to ? tx.to.toLowerCase() : null;
-    
+
                         if (txFrom === TARGET_ADDRESS || txTo === TARGET_ADDRESS) {
                             const txHash = tx.hash;
-                            const value = web3.utils.fromWei(tx.value.toString(), 'ether'); // 添加 toString()
+                            const value = web3.utils.fromWei(tx.value.toString(), 'ether');
                             const action = txFrom === TARGET_ADDRESS ? '卖出' : '买入';
-                            const message = `检测到交易！\n地址: ${TARGET_ADDRESS}\n行为: ${action}\n数量: ${value} BNB\n交易哈希: ${txHash}\n时间: ${new Date().toLocaleString()}`;
+                            
+                            // 获取更多交易详情
+                            const txReceipt = await web3.eth.getTransactionReceipt(txHash);
+                            const timestamp = (await web3.eth.getBlock(blockNum)).timestamp;
+                            const date = new Date(timestamp * 1000);
+                            
+                            // 尝试获取代币信息
+                            let tokenInfo = '';
+                            if (txTo && txTo !== TARGET_ADDRESS) {
+                                try {
+                                    const tokenContract = new web3.eth.Contract([
+                                        {
+                                            "constant": true,
+                                            "inputs": [],
+                                            "name": "symbol",
+                                            "outputs": [{"name": "", "type": "string"}],
+                                            "type": "function"
+                                        }
+                                    ], txTo);
+                                    const symbol = await tokenContract.methods.symbol().call();
+                                    tokenInfo = `\n代币: ${symbol}\n合约地址: ${txTo}`;
+                                } catch (e) {
+                                    tokenInfo = '\n代币: Unknown\n合约地址: ' + txTo;
+                                }
+                            }
+
+                            const gasUsed = txReceipt.gasUsed;
+                            const gasPrice = web3.utils.fromWei(tx.gasPrice.toString(), 'gwei');
+                            const gasCost = web3.utils.fromWei((BigInt(gasUsed) * BigInt(tx.gasPrice)).toString(), 'ether');
+
+                            const message = `交易监控提醒！
+时间: ${date.toLocaleString()}
+行为: ${action}${tokenInfo}
+数量: ${value} BNB
+Gas消耗: ${gasUsed}
+Gas价格: ${gasPrice} Gwei
+Gas总成本: ${gasCost} BNB
+交易哈希: ${txHash}`;
+
                             console.log(message);
                             await sendWechatMessage(message);
                         }
@@ -120,7 +150,7 @@ async function checkNewBlocks() {
         await sendWechatMessage(errorMsg);
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
-} // 删除多余的大括号和后续代码
+}
 
 // 发送消息到微信群
 async function sendWechatMessage(message) {
@@ -155,7 +185,3 @@ monitorTransactions().catch(error => {
     console.error('监控程序发生致命错误:', error);
     process.exit(1);
 });
-
-
-
-
